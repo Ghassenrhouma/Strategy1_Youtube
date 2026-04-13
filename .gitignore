@@ -1,0 +1,43 @@
+# ── Credentials & secrets ─────────────────────────────────────────────────────
+.env
+service_account.json
+
+# ── Cookie files (contain live session tokens) ────────────────────────────────
+cookies_account1.json
+cookies_account2.json
+cookies_account3.json
+
+# ── Runtime state ─────────────────────────────────────────────────────────────
+targets.json
+targets.json.lock
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── Virtual environments ──────────────────────────────────────────────────────
+venv/
+.venv/
+env/
+.env/
+
+# ── Playwright ────────────────────────────────────────────────────────────────
+playwright-report/
+test-results/
+
+# ── IDEs ──────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
