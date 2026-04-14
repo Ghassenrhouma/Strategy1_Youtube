@@ -539,6 +539,49 @@ def post_comment(video_id: str, comment_text: str, page=None, video_title: str =
             context.close()
 
 
+def _sort_comments_newest(page) -> None:
+    """Switch the comment section sort order to Newest first."""
+    try:
+        # Sort button — try multiple selectors across YouTube layouts
+        sort_btn = None
+        for sel in [
+            "yt-sort-filter-sub-menu-renderer #label",
+            "yt-sort-filter-sub-menu-renderer button",
+            "#sort-menu",
+        ]:
+            el = page.query_selector(sel)
+            if el and el.is_visible():
+                sort_btn = el
+                break
+
+        if not sort_btn:
+            print("  [SORT] Sort button not found — using default order")
+            return
+
+        human_click_element(page, sort_btn)
+        time.sleep(random.uniform(0.8, 1.5))
+
+        # Pick the "Newest first" option from the dropdown
+        clicked = False
+        for sel in ["tp-yt-paper-item", "yt-menu-service-item-renderer"]:
+            for item in page.query_selector_all(sel):
+                if "newest" in (item.inner_text() or "").lower():
+                    human_click_element(page, item)
+                    clicked = True
+                    break
+            if clicked:
+                break
+
+        if clicked:
+            time.sleep(random.uniform(1.5, 2.5))
+            print("  [SORT] Switched to Newest first")
+        else:
+            print("  [SORT] Newest first option not found — using default order")
+
+    except Exception as e:
+        print(f"  [SORT] Could not switch sort order: {e}")
+
+
 def post_reply(video_id: str, parent_comment_id: str, reply_text: str, comment_text: str = "") -> str:
     if DRY_RUN:
         print(f"[DRY RUN] Would reply to comment on {video_id}:")
@@ -555,6 +598,9 @@ def post_reply(video_id: str, parent_comment_id: str, reply_text: str, comment_t
             human_scroll(page)
 
             page.wait_for_selector("ytd-comment-thread-renderer", timeout=15000)
+
+            # Switch to Newest first so freshly posted comments are visible
+            _sort_comments_newest(page)
 
             target_thread = None
             comment_snippet = comment_text[:60].strip() if comment_text else ""
