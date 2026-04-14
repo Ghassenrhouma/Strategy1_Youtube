@@ -1,12 +1,13 @@
 """
-run_all.py — Single entry point for the 3-account conversation bot.
+run_all.py — Runs one full 3-account conversation on a single video.
 
-Starts main_account1.py, main_account2.py, and main_account3.py as parallel
-subprocesses. Their output is merged into one stream, prefixed with which
-account produced each line and a timestamp.
+Starts all 3 bots in parallel:
+  Account 1 finds a video and posts the initiator comment, then exits.
+  Account 2 waits for Account 1, posts the challenger reply, then exits.
+  Account 3 waits for Account 2, posts the synthesizer reply, then exits.
 
-If a bot crashes unexpectedly it is automatically restarted after 60 seconds.
-Press Ctrl+C once to stop everything cleanly.
+When all three have finished, run_all.py exits.
+Press Ctrl+C to stop everything early.
 
 Usage:
     python run_all.py
@@ -19,8 +20,8 @@ import threading
 import time
 from datetime import datetime
 
-_HERE   = os.path.dirname(os.path.abspath(__file__))
-PYTHON  = sys.executable
+_HERE  = os.path.dirname(os.path.abspath(__file__))
+PYTHON = sys.executable
 
 BOTS = [
     ("A1", "main_account1.py"),
@@ -28,18 +29,13 @@ BOTS = [
     ("A3", "main_account3.py"),
 ]
 
-RESTART_DELAY = 60   # seconds before restarting a crashed bot
-_shutdown     = False
-_procs        = {}   # label → subprocess.Popen
-_lock         = threading.Lock()
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Output streaming
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _stream(proc: subprocess.Popen, label: str) -> None:
-    """Read lines from a subprocess and print them with prefix + timestamp."""
+    """Read lines from a subprocess stdout and print with prefix + timestamp."""
     try:
         for line in proc.stdout:
             ts = datetime.now().strftime("%H:%M:%S")
@@ -49,18 +45,18 @@ def _stream(proc: subprocess.Popen, label: str) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Process management
+# Launch
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _launch(label: str, script: str) -> subprocess.Popen:
     env = os.environ.copy()
-    env["PYTHONUNBUFFERED"] = "1"   # force line-buffered output from subprocesses
-    env["PYTHONIOENCODING"] = "utf-8"  # force UTF-8 stdout/stderr in subprocesses
+    env["PYTHONUNBUFFERED"]  = "1"
+    env["PYTHONIOENCODING"]  = "utf-8"
 
     proc = subprocess.Popen(
         [PYTHON, "-u", os.path.join(_HERE, script)],
         stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,   # merge stderr into stdout
+        stderr=subprocess.STDOUT,
         text=True,
         encoding="utf-8",
         bufsize=1,
@@ -71,76 +67,21 @@ def _launch(label: str, script: str) -> subprocess.Popen:
     t = threading.Thread(target=_stream, args=(proc, label), daemon=True)
     t.start()
 
-    with _lock:
-        _procs[label] = proc
-
     return proc
-
-
-def _watchdog(label: str, script: str) -> None:
-    """
-    Runs in its own thread. Waits for the bot process to exit; if it exits
-    while we are not shutting down it restarts the process after RESTART_DELAY
-    seconds. Exit code 0 (clean Ctrl+C) and exit code 1 (cookie failure) are
-    both restarted — cookie failures surface in the log output so the operator
-    can intervene.
-    """
-    global _shutdown
-
-    while not _shutdown:
-        with _lock:
-            proc = _procs.get(label)
-
-        if proc is None:
-            time.sleep(1)
-            continue
-
-        exit_code = proc.wait()   # blocks until the process exits
-
-        if _shutdown:
-            break
-
-        ts = datetime.now().strftime("%H:%M:%S")
-        print(
-            f"[LAUNCHER] {ts}  [{label}] exited (code {exit_code}) "
-            f"— restarting in {RESTART_DELAY}s...",
-            flush=True,
-        )
-
-        # Sleep in small chunks so Ctrl+C is responsive during the wait
-        for _ in range(RESTART_DELAY * 10):
-            if _shutdown:
-                return
-            time.sleep(0.1)
-
-        if _shutdown:
-            break
-
-        ts = datetime.now().strftime("%H:%M:%S")
-        print(f"[LAUNCHER] {ts}  [{label}] restarting {script}", flush=True)
-        _launch(label, script)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Shutdown
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _stop_all() -> None:
-    global _shutdown
-    _shutdown = True
-
+def _stop_all(procs: list) -> None:
     print("\n[LAUNCHER] Ctrl+C received — stopping all bots...", flush=True)
-
-    with _lock:
-        snapshot = list(_procs.values())
-
-    for proc in snapshot:
+    for proc in procs:
         try:
             proc.terminate()
         except Exception:
             pass
-
-    for proc in snapshot:
+    for proc in procs:
         try:
             proc.wait(timeout=8)
         except Exception:
@@ -148,7 +89,6 @@ def _stop_all() -> None:
                 proc.kill()
             except Exception:
                 pass
-
     print("[LAUNCHER] All bots stopped.", flush=True)
 
 
@@ -158,33 +98,28 @@ def _stop_all() -> None:
 
 def main() -> None:
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[LAUNCHER] {ts}  Starting 3-account bot system", flush=True)
-    print(f"[LAUNCHER] Python: {PYTHON}", flush=True)
-    print(f"[LAUNCHER] Working dir: {_HERE}", flush=True)
-    print(f"[LAUNCHER] Press Ctrl+C to stop all bots\n", flush=True)
+    print(f"[LAUNCHER] {ts}  Starting — one conversation on one video", flush=True)
+    print(f"[LAUNCHER] Press Ctrl+C to stop early\n", flush=True)
 
-    # Launch all bots and their watchdogs
+    procs = []
     for label, script in BOTS:
-        _launch(label, script)
-        print(f"[LAUNCHER] {script} started (PID {_procs[label].pid})", flush=True)
-
-        # Small stagger so bots don't all hit YouTube simultaneously at startup
-        time.sleep(3)
-
-    # Start watchdog threads (daemon=True so they don't block clean exit)
-    for label, script in BOTS:
-        t = threading.Thread(target=_watchdog, args=(label, script), daemon=True)
-        t.start()
+        proc = _launch(label, script)
+        procs.append(proc)
+        print(f"[LAUNCHER] {script} started (PID {proc.pid})", flush=True)
+        time.sleep(3)   # small stagger so bots don't all connect simultaneously
 
     print(flush=True)
 
-    # Main thread just waits — watchdogs and stream threads do all the work
+    # Wait for all three to finish naturally
     try:
-        while not _shutdown:
-            time.sleep(1)
+        for proc in procs:
+            proc.wait()
     except KeyboardInterrupt:
-        _stop_all()
+        _stop_all(procs)
         sys.exit(0)
+
+    ts = datetime.now().strftime("%H:%M:%S")
+    print(f"\n[LAUNCHER] {ts}  All bots finished — conversation complete.", flush=True)
 
 
 if __name__ == "__main__":

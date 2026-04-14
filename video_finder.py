@@ -5,7 +5,7 @@ import time
 from urllib.parse import quote_plus
 
 from dotenv import load_dotenv
-from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+from playwright.sync_api import sync_playwright
 
 from browser_helper import get_browser_context, patch_page, human_scroll
 
@@ -170,54 +170,6 @@ def _scrape_search_results(page, max_results: int = 20) -> list:
     return candidates
 
 
-def _comments_active(page) -> bool:
-    """
-    Scroll to the comments section on the current video page and return True
-    if comments are enabled and at least two threads are visible.
-    Must be called after the video page has loaded.
-    """
-    # Scroll down in steps to trigger comment section lazy-load
-    for _ in range(5):
-        page.evaluate("window.scrollBy(0, 600)")
-        time.sleep(1.2)
-
-    # Check for an explicit "comments are turned off" message
-    try:
-        for el in page.query_selector_all("ytd-message-renderer"):
-            text = (el.inner_text() or "").lower()
-            if "comments are turned off" in text or "comments have been disabled" in text:
-                return False
-    except Exception:
-        pass
-
-    # Wait briefly for comments to materialise
-    try:
-        page.wait_for_selector(
-            "ytd-comment-thread-renderer, #simplebox-placeholder",
-            timeout=8000,
-        )
-    except PlaywrightTimeoutError:
-        return False
-
-    # Require at least 2 visible comment threads (confirms real engagement)
-    try:
-        threads = page.query_selector_all("ytd-comment-thread-renderer")
-        if len(threads) >= 2:
-            return True
-    except Exception:
-        pass
-
-    # Fallback: comment input present means comments are open (even if threads
-    # haven't rendered yet — could be a very new video)
-    try:
-        placeholder = page.query_selector("#simplebox-placeholder")
-        if placeholder and placeholder.is_visible():
-            return True
-    except Exception:
-        pass
-
-    return False
-
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -267,33 +219,18 @@ def find_target_video(seen_video_ids: set, page=None) -> dict:
             ]
             print(f"[FINDER] {len(filtered)} candidates after pre-filter")
 
-            for candidate in filtered[:6]:
-                vid = candidate["video_id"]
-                title = candidate["title"]
-                print(f"[FINDER] Checking comments: {vid} | {title[:55]}")
-
-                try:
-                    pg.goto(f"https://www.youtube.com/watch?v={vid}")
-                    pg.wait_for_load_state("load")
-                    time.sleep(random.uniform(2, 4))
-                except Exception as e:
-                    print(f"[FINDER] Navigation error: {e}")
-                    continue
-
-                if not _comments_active(pg):
-                    print(f"[FINDER] Skipping — comments inactive or disabled")
-                    continue
-
-                print(f"[FINDER] Found: {vid} | {title[:55]}")
+            if filtered:
+                candidate = filtered[0]
+                print(f"[FINDER] Found: {candidate['video_id']} | {candidate['title'][:55]}")
                 return {
-                    "video_id": vid,
-                    "title": title,
+                    "video_id":    candidate["video_id"],
+                    "title":       candidate["title"],
                     "description": candidate["description"],
                 }
 
         raise RuntimeError(
             "No suitable video found after trying 4 queries. "
-            "All candidates were either already used, too old, or had comments disabled."
+            "All candidates were either already used or too old."
         )
 
     if page is not None:

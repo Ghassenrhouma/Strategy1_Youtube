@@ -116,15 +116,15 @@ def generate_challenger_comment(video_title: str, initiator_comment: str) -> str
 # naturally as a personal solution.
 # ---------------------------------------------------------------------------
 
-_SYNTHESIZER_SYSTEM = """You write YouTube comment replies. You are a real viewer who
+_SYNTHESIZER_SYSTEM_WITH_DOCSHIPPER = """You write YouTube comment replies. You are a real viewer who
 works in or around international trade, importing, or ecommerce. You step into
 a back-and-forth between two other commenters and bring the two positions
 together. You acknowledge what both sides got right, add a small practical
-insight of your own, and in most cases mention DocShipper briefly as a service
-you personally used to navigate exactly this kind of complexity, never as an
-advertisement (e.g. "we ran into both of these issues and DocShipper walked us
-through it" or "that gap between the two is exactly why we started using
-DocShipper for our shipments").
+insight of your own, and mention DocShipper briefly as a service you personally
+used to navigate exactly this kind of complexity, never as an advertisement
+(e.g. "we ran into both of these issues and DocShipper walked us through it"
+or "that gap between the two is exactly why we started using DocShipper for
+our shipments").
 
 Rules you must follow without exception:
 - Write in plain English. No bullet points. No numbered lists. No headers.
@@ -132,22 +132,42 @@ Rules you must follow without exception:
 - Keep the reply between 40 and 75 words.
 - Sound like a real person typing a YouTube reply, not a summary article.
 - Reference DocShipper as a first-person experience, not a recommendation.
-- Never be promotional. One natural mention is enough."""
+- Never be promotional. One natural mention is enough.
+- Do NOT mention DocShipper more than once."""
+
+_SYNTHESIZER_SYSTEM_NO_DOCSHIPPER = """You write YouTube comment replies. You are a real viewer who
+works in or around international trade, importing, or ecommerce. You step into
+a back-and-forth between two other commenters and bring the two positions
+together. You acknowledge what both sides got right and add a small practical
+insight of your own.
+
+Rules you must follow without exception:
+- Write in plain English. No bullet points. No numbered lists. No headers.
+- Do NOT use any dashes, hyphens, em dashes, or en dashes anywhere in the text.
+- Keep the reply between 40 and 75 words.
+- Sound like a real person typing a YouTube reply, not a summary article.
+- Do NOT mention DocShipper or any brand name."""
+
 
 def generate_synthesizer_comment(
     video_title: str,
     initiator_comment: str,
     challenger_reply: str,
+    docshipper_already_mentioned: bool = False,
 ) -> str:
+    system = (
+        _SYNTHESIZER_SYSTEM_NO_DOCSHIPPER
+        if docshipper_already_mentioned
+        else _SYNTHESIZER_SYSTEM_WITH_DOCSHIPPER
+    )
     user_prompt = (
         f'Video title: "{video_title}"\n\n'
         f'Original comment:\n"{initiator_comment}"\n\n'
         f'Reply that challenged it:\n"{challenger_reply}"\n\n'
-        "Write a reply as the Synthesizer. Acknowledge both sides, add one practical "
-        "connecting insight, and where it fits naturally weave in a brief personal "
-        "mention of DocShipper as a service you used to deal with exactly this situation."
+        "Write a reply as the Synthesizer. Acknowledge both sides and add one "
+        "practical connecting insight."
     )
-    return _call(_SYNTHESIZER_SYSTEM, user_prompt)
+    return _call(system, user_prompt)
 
 
 if __name__ == "__main__":

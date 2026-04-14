@@ -7,7 +7,6 @@ import os
 import sys
 import time
 import random
-from datetime import datetime
 from dotenv import load_dotenv
 
 # ── Load .env then override account-specific vars BEFORE any local import ──
@@ -25,25 +24,10 @@ from tracker import log_action
 from verify_cookies import verify_cookies
 
 ROLE             = "challenger"
-WAIT_MIN         = 1200   # 20 min  — between consecutive runs of this account
-WAIT_MAX         = 2400   # 40 min
 REPLY_DELAY_MIN  = 1200   # 20 min  — after spotting A1's comment, before replying
 REPLY_DELAY_MAX  = 1800   # 30 min
-NO_TARGET_WAIT   = 600    # 10 min — how long to sleep when queue is empty
-NO_TARGET_WAIT_DRY = 30  # shorter wait in dry-run / skip-delays mode
-
-
-def _is_night_hours() -> bool:
-    return 0 <= datetime.now().hour < 8
-
-
-def _inter_run_wait() -> None:
-    if SKIP_DELAYS:
-        print("[SLEEP] SKIP_DELAYS=True — skipping inter-run wait")
-        return
-    delay = random.uniform(WAIT_MIN, WAIT_MAX)
-    print(f"[SLEEP] Waiting {delay / 60:.1f} min before next run...")
-    time.sleep(delay)
+NO_TARGET_WAIT   = 600    # 10 min — poll interval when A1 hasn't posted yet
+NO_TARGET_WAIT_DRY = 30  # shorter poll interval in skip-delays mode
 
 
 def _run_once() -> bool:
@@ -115,18 +99,14 @@ def main() -> None:
 
     while True:
         try:
-            if _is_night_hours():
-                print(f"[SLEEP] Night hours ({datetime.now().strftime('%H:%M')}) — sleeping 30 min")
-                time.sleep(1800)
-                continue
-
             posted = _run_once()
 
-            if not posted:
-                wait = NO_TARGET_WAIT_DRY if SKIP_DELAYS else NO_TARGET_WAIT
-                print(f"[A2] No account1_done target yet — checking again in {wait // 60} min")
-                time.sleep(wait)
-                continue
+            if posted:
+                break  # one reply done — exit
+
+            wait = NO_TARGET_WAIT_DRY if SKIP_DELAYS else NO_TARGET_WAIT
+            print(f"[A2] No account1_done target yet — checking again in {wait // 60} min")
+            time.sleep(wait)
 
         except KeyboardInterrupt:
             print("\n[EXIT] Stopped by user")
@@ -135,9 +115,6 @@ def main() -> None:
             print(f"[ERROR] {exc}")
             print("[ERROR] Waiting 5 min before retrying...")
             time.sleep(300)
-            continue
-
-        _inter_run_wait()
 
 
 if __name__ == "__main__":

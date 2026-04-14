@@ -12,9 +12,9 @@ SERVICE_ACCOUNT_PATH = os.getenv("SERVICE_ACCOUNT_PATH", "service_account.json")
 TARGETS_FILE = os.getenv("TARGETS_FILE", "targets.json")
 
 # Sheet columns (1-indexed for gspread, 0-indexed here for reference):
-# timestamp | video_id | video_title | account | role | comment_id | replied_to_id | text | status | flagged
+# timestamp | video_id | video_link | video_title | account | role | comment_id | replied_to_id | text | status | flagged
 HEADER = [
-    "timestamp", "video_id", "video_title", "account", "role",
+    "timestamp", "video_id", "video_link", "video_title", "account", "role",
     "comment_id", "replied_to_id", "text", "status", "flagged",
 ]
 
@@ -55,12 +55,14 @@ def log_action(
     replied_to_id  : comment_id this is replying to; empty string for Account 1
     dry_run        : If True, print the row instead of writing to the sheet
     """
-    timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-    account = os.getenv("ACCOUNT_ID", "account1")
+    timestamp  = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    account    = os.getenv("ACCOUNT_ID", "account1")
+    video_link = f"https://www.youtube.com/watch?v={video_id}"
 
     row = [
         timestamp,
         video_id,
+        video_link,
         video_title,
         account,
         role,

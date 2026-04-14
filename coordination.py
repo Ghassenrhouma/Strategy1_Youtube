@@ -93,6 +93,7 @@ def add_target(video_id: str, video_title: str) -> None:
             return
         data["targets"].append({
             "video_id":            video_id,
+            "video_link":          f"https://www.youtube.com/watch?v={video_id}",
             "video_title":         video_title,
             "status":              "pending",
             "account1_comment_id":   "",
