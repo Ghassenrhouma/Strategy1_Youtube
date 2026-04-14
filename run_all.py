@@ -55,12 +55,14 @@ def _stream(proc: subprocess.Popen, label: str) -> None:
 def _launch(label: str, script: str) -> subprocess.Popen:
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"   # force line-buffered output from subprocesses
+    env["PYTHONIOENCODING"] = "utf-8"  # force UTF-8 stdout/stderr in subprocesses
 
     proc = subprocess.Popen(
         [PYTHON, "-u", os.path.join(_HERE, script)],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,   # merge stderr into stdout
         text=True,
+        encoding="utf-8",
         bufsize=1,
         env=env,
         cwd=_HERE,

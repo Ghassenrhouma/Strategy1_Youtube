@@ -102,7 +102,7 @@ def _run_once() -> bool:
         replied_to_id=a1_id,
         dry_run=DRY_RUN,
     )
-    print(f"[A2] ✓ Done — handed off to Account 3")
+    print(f"[A2] Done - handed off to Account 3")
     return True
 
 
@@ -110,7 +110,7 @@ def main() -> None:
     print(f"[STARTUP] Account 2 | Challenger | DRY_RUN={DRY_RUN} | SKIP_DELAYS={SKIP_DELAYS}")
 
     if not DRY_RUN and not verify_cookies():
-        print("[STARTUP] ✗ Cookie check failed — re-run save_cookies.py for account2")
+        print("[STARTUP] Cookie check failed - re-run save_cookies.py for account2")
         sys.exit(1)
 
     while True:

@@ -216,7 +216,7 @@ def _recover_player_error(page, video_url: str):
         if retried:
             time.sleep(random.uniform(3.0, 5.0))
             if not _is_player_error(page):
-                print("  [ERROR] ✓ Retry worked")
+                print("  [ERROR] Retry worked")
                 _ensure_video_playing(page)
                 return
     except Exception:
@@ -276,7 +276,7 @@ def _try_like_video(page):
         time.sleep(random.uniform(1.0, 2.0))
         aria_after = like_btn.get_attribute("aria-pressed")
         if aria_after == "true":
-            print("  [LIKE] ✓ Liked")
+            print("  [LIKE] Liked")
         else:
             print("  [LIKE] Click sent but state unchanged — may not have registered")
     except Exception as e:
@@ -575,7 +575,7 @@ def post_reply(video_id: str, parent_comment_id: str, reply_text: str, comment_t
                 time.sleep(random.uniform(1.0, 2.0))
 
             if not target_thread:
-                print(f"  [REPLY] ✗ Target comment not found after 12 scrolls — aborting")
+                print(f"  [REPLY] Target comment not found after 12 scrolls - aborting")
                 raise Exception("Target comment not found in page — not posting to avoid misfire")
 
             target_thread.scroll_into_view_if_needed()

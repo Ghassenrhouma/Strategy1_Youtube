@@ -243,4 +243,4 @@ if __name__ == "__main__":
         print(json.dumps(json.load(f), indent=2))
 
     shutil.rmtree(tmp_dir)
-    print("\n✓ coordination smoke test passed")
+    print("\n[OK] coordination smoke test passed")

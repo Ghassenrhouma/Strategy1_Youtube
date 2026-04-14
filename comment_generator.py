@@ -17,7 +17,7 @@ def _call(system_prompt: str, user_prompt: str) -> str:
     response = _client.chat.completions.create(
         model=MODEL,
         messages=[
-            {"role": "system", "content": system_prompt},
+            {"role": "system", "content": "/no_think\n" + system_prompt},
             {"role": "user", "content": user_prompt},
         ],
         temperature=0.85,
@@ -28,8 +28,9 @@ def _call(system_prompt: str, user_prompt: str) -> str:
 
 
 def _clean(text: str) -> str:
-    # Strip <think> blocks (Qwen reasoning traces)
+    # Strip <think> blocks (Qwen reasoning traces), including unclosed ones
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    text = re.sub(r"<think>.*", "", text, flags=re.DOTALL)
     # Remove em dashes and en dashes
     text = text.replace("\u2014", ",").replace("\u2013", " to ")
     # Remove spaced hyphens used as dashes (e.g. " - ")

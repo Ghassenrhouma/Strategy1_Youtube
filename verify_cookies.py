@@ -17,13 +17,13 @@ def verify_cookies() -> bool:
             context.add_cookies(cookies)
             page = context.new_page()
             page.goto("https://www.youtube.com")
-            page.wait_for_load_state("networkidle")
+            page.wait_for_load_state("load")
 
             if page.query_selector("#avatar-btn"):
-                print("✓ Cookies valid — logged in")
+                print("[OK] Cookies valid - logged in")
                 return True
             else:
-                print("✗ Cookies expired — re-run save_cookies.py")
+                print("[FAIL] Cookies expired - re-run save_cookies.py")
                 return False
         finally:
             browser.close()

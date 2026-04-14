@@ -102,7 +102,7 @@ def _run_once() -> bool:
         replied_to_id=a2_id,
         dry_run=DRY_RUN,
     )
-    print(f"[A3] ✓ Conversation complete for {video_id}")
+    print(f"[A3] Conversation complete for {video_id}")
     return True
 
 
@@ -110,7 +110,7 @@ def main() -> None:
     print(f"[STARTUP] Account 3 | Synthesizer | DRY_RUN={DRY_RUN} | SKIP_DELAYS={SKIP_DELAYS}")
 
     if not DRY_RUN and not verify_cookies():
-        print("[STARTUP] ✗ Cookie check failed — re-run save_cookies.py for account3")
+        print("[STARTUP] Cookie check failed - re-run save_cookies.py for account3")
         sys.exit(1)
 
     while True:

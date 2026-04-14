@@ -1,12 +1,26 @@
 import json
 import os
+import subprocess
+import time
 from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright
 
 load_dotenv()
 
 BRAVE_EXE = r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe"
-BRAVE_USER_DATA = r"C:\Users\ghass\AppData\Local\BraveSoftware\Brave-Browser\User Data"
+BRAVE_USER_DATA = os.path.join(os.environ["USERPROFILE"], "AppData", "Local", "BraveSoftware", "Brave-Browser", "User Data")
+
+
+def kill_brave():
+    """Kill any running Brave processes so Playwright can use the profile."""
+    result = subprocess.run(
+        ["tasklist", "/FI", "IMAGENAME eq brave.exe", "/NH"],
+        capture_output=True, text=True
+    )
+    if "brave.exe" in result.stdout:
+        print("Closing existing Brave windows to allow Playwright access...")
+        subprocess.run(["taskkill", "/F", "/IM", "brave.exe"], capture_output=True)
+        time.sleep(2)
 
 
 def save_cookies():
@@ -15,6 +29,8 @@ def save_cookies():
         print("Invalid choice. Enter 1, 2 or 3.")
         return
     output_file = f"cookies_account{account}.json"
+
+    kill_brave()
 
     with sync_playwright() as p:
         context = p.chromium.launch_persistent_context(
@@ -40,7 +56,7 @@ def save_cookies():
         with open(output_file, "w") as f:
             json.dump(youtube_cookies, f, indent=2)
 
-        print(f"✓ Saved {len(youtube_cookies)} cookies to {output_file}")
+        print(f"[OK] Saved {len(youtube_cookies)} cookies to {output_file}")
         context.close()
 
 

@@ -90,7 +90,7 @@ def _is_within_30_days(upload_time: str) -> bool:
 def _human_search(page, query: str) -> None:
     """Type query into YouTube search bar with human-like cadence."""
     page.goto("https://www.youtube.com/?hl=en&gl=US")
-    page.wait_for_load_state("networkidle")
+    page.wait_for_load_state("load")
     time.sleep(random.uniform(2, 5))
 
     search_selector = None
@@ -111,7 +111,7 @@ def _human_search(page, query: str) -> None:
         page.goto(
             f"https://www.youtube.com/results?search_query={quote_plus(query)}&hl=en&gl=US"
         )
-        page.wait_for_load_state("networkidle")
+        page.wait_for_load_state("load")
         time.sleep(random.uniform(2, 4))
         return
 
@@ -126,7 +126,7 @@ def _human_search(page, query: str) -> None:
 
     time.sleep(random.uniform(0.5, 1.5))
     page.keyboard.press("Enter")
-    page.wait_for_load_state("networkidle")
+    page.wait_for_load_state("load")
     time.sleep(random.uniform(2, 4))
 
 
@@ -274,7 +274,7 @@ def find_target_video(seen_video_ids: set, page=None) -> dict:
 
                 try:
                     pg.goto(f"https://www.youtube.com/watch?v={vid}")
-                    pg.wait_for_load_state("networkidle")
+                    pg.wait_for_load_state("load")
                     time.sleep(random.uniform(2, 4))
                 except Exception as e:
                     print(f"[FINDER] Navigation error: {e}")
@@ -284,7 +284,7 @@ def find_target_video(seen_video_ids: set, page=None) -> dict:
                     print(f"[FINDER] Skipping — comments inactive or disabled")
                     continue
 
-                print(f"[FINDER] ✓ Found: {vid} | {title[:55]}")
+                print(f"[FINDER] Found: {vid} | {title[:55]}")
                 return {
                     "video_id": vid,
                     "title": title,
