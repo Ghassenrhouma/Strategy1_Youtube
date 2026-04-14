@@ -21,8 +21,9 @@ def _wait_for_load(page, timeout=10000):
         pass  # page is loaded enough
 
 
-DRY_RUN = os.getenv("DRY_RUN", "True").lower() == "true"
+DRY_RUN    = os.getenv("DRY_RUN",    "True").lower() == "true"
 SKIP_DELAYS = os.getenv("SKIP_DELAYS", "True").lower() == "true"
+NO_WATCH   = os.getenv("NO_WATCH",   "False").lower() == "true"
 
 
 def _random_imperfection(page):
@@ -471,7 +472,8 @@ def post_comment(video_id: str, comment_text: str, page=None, video_title: str =
 
     def _execute(pg):
         _navigate_to_video(pg, video_id, video_title)
-        _variable_video_behavior(pg)
+        if not NO_WATCH:
+            _variable_video_behavior(pg)
 
         if f"watch?v={video_id}" not in pg.url:
             print(f"  [WARN] Autoplay navigated away — returning to target video")
@@ -542,6 +544,12 @@ def post_comment(video_id: str, comment_text: str, page=None, video_title: str =
 def _sort_comments_newest(page) -> None:
     """Switch the comment section sort order to Newest first."""
     try:
+        # Scroll the comments section into view first so the sort button is reachable
+        comments_section = page.query_selector("#comments")
+        if comments_section:
+            comments_section.scroll_into_view_if_needed()
+            time.sleep(random.uniform(0.5, 1.0))
+
         # Sort button — try multiple selectors across YouTube layouts
         sort_btn = None
         for sel in [
@@ -550,25 +558,42 @@ def _sort_comments_newest(page) -> None:
             "#sort-menu",
         ]:
             el = page.query_selector(sel)
-            if el and el.is_visible():
-                sort_btn = el
-                break
+            if el:
+                try:
+                    el.scroll_into_view_if_needed()
+                except Exception:
+                    pass
+                if el.is_visible():
+                    sort_btn = el
+                    break
 
         if not sort_btn:
             print("  [SORT] Sort button not found — using default order")
             return
 
-        human_click_element(page, sort_btn)
+        sort_btn.click()   # plain click — bezier curve can dismiss the dropdown
         time.sleep(random.uniform(0.8, 1.5))
 
-        # Pick the "Newest first" option from the dropdown
+        # Pick the "Newest first" option from the dropdown.
+        # Try text matching first (works for English), then fall back to the
+        # second visible item — YouTube always puts "Newest first" second
+        # regardless of display language.
         clicked = False
-        for sel in ["tp-yt-paper-item", "yt-menu-service-item-renderer"]:
-            for item in page.query_selector_all(sel):
-                if "newest" in (item.inner_text() or "").lower():
-                    human_click_element(page, item)
+        for sel in ["tp-yt-paper-item", "yt-menu-service-item-renderer", "ytd-menu-service-item-renderer"]:
+            items = [i for i in page.query_selector_all(sel) if i.is_visible()]
+            if not items:
+                continue
+            # Text match (language-agnostic keywords)
+            for item in items:
+                txt = (item.inner_text() or "").lower()
+                if "newest" in txt or "recent" in txt:
+                    item.click()   # plain click — bezier path can close the dropdown
                     clicked = True
                     break
+            # Fallback: second visible item is always "Newest first"
+            if not clicked and len(items) >= 2:
+                items[1].click()
+                clicked = True
             if clicked:
                 break
 
@@ -594,27 +619,118 @@ def post_reply(video_id: str, parent_comment_id: str, reply_text: str, comment_t
             page = context.new_page()
             patch_page(page)
             _navigate_to_video(page, video_id)
-            _variable_video_behavior(page)
+            if not NO_WATCH:
+                _variable_video_behavior(page)
+
+            # Guard against autoplay navigating away during watch time
+            if f"watch?v={video_id}" not in page.url:
+                print(f"  [WARN] Autoplay navigated away — returning to target video")
+                page.goto(f"https://www.youtube.com/watch?v={video_id}")
+                _wait_for_load(page)
+                time.sleep(random.uniform(2, 4))
+
             human_scroll(page)
 
-            page.wait_for_selector("ytd-comment-thread-renderer", timeout=15000)
+            # Step 1: wait for comments section container
+            page.wait_for_selector("#comments ytd-item-section-renderer", timeout=30000)
 
-            # Switch to Newest first so freshly posted comments are visible
+            # Step 2: sort to Newest first BEFORE loading threads
             _sort_comments_newest(page)
 
+            # Step 3: wait for comment section to reload after sort, then scroll
+            # The sort triggers a DOM refresh — stale elements from before the
+            # sort must be discarded, so we re-wait from scratch.
+            time.sleep(random.uniform(1.5, 2.5))
+            for _scroll_attempt in range(15):
+                if page.query_selector("ytd-comment-thread-renderer"):
+                    break
+                page.evaluate("window.scrollBy(0, 400)")
+                time.sleep(random.uniform(0.8, 1.5))
+
+            page.wait_for_selector("ytd-comment-thread-renderer", timeout=30000)
+            time.sleep(random.uniform(0.5, 1.0))  # let all threads settle
+
             target_thread = None
-            comment_snippet = comment_text[:60].strip() if comment_text else ""
-            print(f"  [REPLY] Looking for comment: '{comment_snippet[:80]}'")
+            # Build multiple short snippets from the stored text to handle
+            # truncation, typos, or rendering differences on the page.
+            raw = (comment_text or "").strip()
+            words = raw.split()
+            # Use first 8 clean words as the reference set for fuzzy matching.
+            # Exact substring match fails because human_type introduces typos.
+            ref_words = [w.lower().strip("'\".,!?") for w in words[:8] if len(w) > 3]
+            print(f"  [REPLY] Matching against ref words: {ref_words}")
+
+            def _text_matches(thread_text: str) -> bool:
+                t_words = [w.lower().strip("'\".,!?") for w in thread_text.split() if len(w) > 3]
+                if not ref_words or not t_words:
+                    return False
+                matches = sum(1 for w in ref_words if any(w in tw or tw in w for tw in t_words))
+                score = matches / len(ref_words)
+                return score >= 0.5  # 50% of ref words found = match
 
             for scroll_attempt in range(12):
+                # Expand "...more" truncations
+                for expander in page.query_selector_all("ytd-comment-thread-renderer #expand"):
+                    try:
+                        if expander.is_visible():
+                            expander.click()
+                            time.sleep(0.3)
+                    except Exception:
+                        pass
+
+                # Expand "N replies" dropdowns — try every known selector variant
+                for sel in [
+                    "ytd-comment-replies-renderer #expander",
+                    "ytd-comment-replies-renderer #more-replies",
+                    "ytd-comment-replies-renderer ytd-button-renderer",
+                ]:
+                    for btn in page.query_selector_all(sel):
+                        try:
+                            if btn.is_visible():
+                                btn.click()
+                                time.sleep(random.uniform(0.5, 1.0))
+                        except Exception:
+                            pass
+
                 threads = page.query_selector_all("ytd-comment-thread-renderer")
+
+                if scroll_attempt == 0:
+                    print(f"  [REPLY] {len(threads)} thread(s) on page")
+                    for i, th in enumerate(threads[:5]):
+                        el = th.query_selector("#content-text")
+                        txt = (el.inner_text() or "").strip()[:80] if el else ""
+                        print(f"  [REPLY] Thread[{i}] top: '{txt}'")
+                        # Print nested replies if any
+                        nested = th.query_selector_all("ytd-comment-renderer #content-text")
+                        for j, nel in enumerate(nested[:3]):
+                            ntxt = (nel.inner_text() or "").strip()[:80]
+                            print(f"  [REPLY] Thread[{i}] reply[{j}]: '{ntxt}'")
+                        # Print any reply expander buttons found
+                        for sel in ["ytd-comment-replies-renderer #expander", "ytd-comment-replies-renderer #more-replies", "ytd-comment-replies-renderer ytd-button-renderer"]:
+                            btns = th.query_selector_all(sel)
+                            if btns:
+                                print(f"  [REPLY] Thread[{i}] expander '{sel}': {len(btns)} found, visible={btns[0].is_visible()}")
+
                 for thread in threads:
+                    # Check top-level comment text
                     text_el = thread.query_selector("#content-text")
                     thread_text = (text_el.inner_text() or "").strip() if text_el else ""
-                    if comment_snippet and comment_snippet in thread_text:
-                        print(f"  [REPLY] Matched on scroll attempt {scroll_attempt}: '{thread_text[:80]}'")
+                    if _text_matches(thread_text):
+                        print(f"  [REPLY] Matched top-level on scroll {scroll_attempt}: '{thread_text[:80]}'")
                         target_thread = thread
                         break
+
+                    # Check nested replies inside this thread
+                    reply_els = thread.query_selector_all("ytd-comment-renderer #content-text")
+                    for rel in reply_els:
+                        reply_text_found = (rel.inner_text() or "").strip()
+                        if _text_matches(reply_text_found):
+                            print(f"  [REPLY] Matched nested reply on scroll {scroll_attempt}: '{reply_text_found[:80]}'")
+                            target_thread = thread
+                            break
+                    if target_thread:
+                        break
+
                 if target_thread:
                     break
                 page.evaluate("window.scrollBy(0, 500)")
@@ -666,7 +782,8 @@ def scrape_and_reply(video_id: str, video_title: str, is_replyable_fn, generate_
 
     def _execute(pg):
         _navigate_to_video(pg, video_id, video_title)
-        _variable_video_behavior(pg)
+        if not NO_WATCH:
+            _variable_video_behavior(pg)
 
         if f"watch?v={video_id}" not in pg.url:
             print(f"  [WARN] Autoplay navigated away — returning to target video")
@@ -676,7 +793,20 @@ def scrape_and_reply(video_id: str, video_title: str, is_replyable_fn, generate_
 
         human_scroll(pg)
 
-        pg.wait_for_selector("ytd-comment-thread-renderer", timeout=15000)
+        # Step 1: wait for comments section container
+        pg.wait_for_selector("#comments ytd-item-section-renderer", timeout=30000)
+
+        # Step 2: sort to Newest first BEFORE loading threads
+        _sort_comments_newest(pg)
+
+        # Step 3: scroll to trigger individual thread rendering
+        for _scroll_attempt in range(15):
+            if pg.query_selector("ytd-comment-thread-renderer"):
+                break
+            pg.evaluate("window.scrollBy(0, 400)")
+            time.sleep(random.uniform(0.8, 1.5))
+
+        pg.wait_for_selector("ytd-comment-thread-renderer", timeout=30000)
 
         target_thread = None
         target_text = ""
