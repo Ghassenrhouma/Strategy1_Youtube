@@ -10,6 +10,8 @@ cookies_account3.json
 # ── Runtime state ─────────────────────────────────────────────────────────────
 targets.json
 targets.json.lock
+targets_s2.json
+targets_s2.json.lock
 
 # ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
