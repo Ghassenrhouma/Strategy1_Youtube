@@ -40,14 +40,36 @@ def get_browser_context(playwright):
 
 
 def save_cookies(context) -> None:
-    """Write the current browser context cookies back to disk.
+    """Merge refreshed browser cookies back to disk.
 
-    Call this before closing the context so rotated/refreshed tokens
-    are persisted and the next session doesn't start with stale cookies.
+    Uses a merge strategy instead of overwrite: cookies returned by the
+    session (potentially rotated by YouTube/Google) update the existing
+    file, while cookies that were loaded but never surfaced by this
+    session (not all cookies are returned by context.cookies()) are
+    preserved. This prevents critical auth tokens from being wiped.
     """
-    cookies = context.cookies()
+    new_cookies = context.cookies()
+
+    # Load existing cookies so we can preserve ones not returned this session
+    try:
+        with open(COOKIES_PATH, encoding="utf-8") as f:
+            existing = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        existing = []
+
+    # Index existing cookies by (name, domain, path) — the unique key
+    cookie_map = {
+        (c.get("name"), c.get("domain"), c.get("path")): c
+        for c in existing
+    }
+
+    # Overlay with fresh cookies — they take priority
+    for cookie in new_cookies:
+        key = (cookie.get("name"), cookie.get("domain"), cookie.get("path"))
+        cookie_map[key] = cookie
+
     with open(COOKIES_PATH, "w", encoding="utf-8") as f:
-        json.dump(cookies, f, indent=2)
+        json.dump(list(cookie_map.values()), f, indent=2)
 
 
 def patch_page(page):
