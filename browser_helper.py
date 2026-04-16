@@ -39,6 +39,17 @@ def get_browser_context(playwright):
     return context
 
 
+def save_cookies(context) -> None:
+    """Write the current browser context cookies back to disk.
+
+    Call this before closing the context so rotated/refreshed tokens
+    are persisted and the next session doesn't start with stale cookies.
+    """
+    cookies = context.cookies()
+    with open(COOKIES_PATH, "w", encoding="utf-8") as f:
+        json.dump(cookies, f, indent=2)
+
+
 def patch_page(page):
     # Randomised canvas noise seed — unique per session so fingerprint differs each run
     noise = random.randint(1, 10)

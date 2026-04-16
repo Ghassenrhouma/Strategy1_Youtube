@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
 from browser_helper import (
-    get_browser_context, patch_page,
+    get_browser_context, save_cookies, patch_page,
     human_click, human_click_element, human_scroll, human_type,
 )
 
@@ -461,6 +461,7 @@ def passive_browse_session(page=None):
         try:
             _browse(pg)
         finally:
+            save_cookies(context)
             context.close()
 
 
@@ -538,6 +539,7 @@ def post_comment(video_id: str, comment_text: str, page=None, video_title: str =
             patch_page(pg)
             return _execute(pg)
         finally:
+            save_cookies(context)
             context.close()
 
 
@@ -768,6 +770,7 @@ def post_reply(video_id: str, parent_comment_id: str, reply_text: str, comment_t
 
             return f"reply_{parent_comment_id}"
         finally:
+            save_cookies(context)
             context.close()
 
 
@@ -897,6 +900,7 @@ def scrape_and_reply(video_id: str, video_title: str, is_replyable_fn, generate_
             patch_page(pg)
             return _execute(pg)
         finally:
+            save_cookies(context)
             context.close()
 
 
@@ -932,6 +936,7 @@ def random_human_action(video_id: str, page=None):
             patch_page(pg)
             _act(pg)
         finally:
+            save_cookies(context)
             context.close()
 
 
