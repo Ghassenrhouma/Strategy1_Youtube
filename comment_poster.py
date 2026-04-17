@@ -1,4 +1,5 @@
 import os
+import re
 import random
 import time
 from datetime import datetime
@@ -654,16 +655,29 @@ def post_reply(video_id: str, parent_comment_id: str, reply_text: str, comment_t
             target_renderer = None  # specific comment renderer whose reply button to click
 
             raw = (comment_text or "").strip()
-            words = raw.split()
-            ref_words = [w.lower().strip("'\".,!?") for w in words[:8] if len(w) > 3]
-            print(f"  [REPLY] Matching against ref words: {ref_words}")
+
+            def _clean_text(s: str) -> str:
+                """Lowercase, strip all punctuation/special chars, collapse whitespace."""
+                s = re.sub(r"[^\w\s]", " ", s.lower())
+                return re.sub(r"\s+", " ", s).strip()
+
+            raw_clean = _clean_text(raw)
+            ref_start = raw_clean[:45]   # first ~45 cleaned chars — unique enough for a match
+            ref_words = [w for w in raw_clean.split() if len(w) > 3][:10]
+            print(f"  [REPLY] Looking for: '{raw[:80]}'")
+            print(f"  [REPLY] Cleaned ref start: '{ref_start}'")
 
             def _text_matches(thread_text: str) -> bool:
-                t_words = [w.lower().strip("'\".,!?") for w in thread_text.split() if len(w) > 3]
-                if not ref_words or not t_words:
+                page_clean = _clean_text(thread_text)
+                # Primary: cleaned substring of stored text appears somewhere in page text
+                # (handles @username prefix YouTube adds to replies)
+                if len(ref_start) > 12 and ref_start in page_clean:
+                    return True
+                # Fallback: word-overlap (for truncated or slightly altered text)
+                if not ref_words or not page_clean:
                     return False
-                matches = sum(1 for w in ref_words if any(w in tw or tw in w for tw in t_words))
-                return (matches / len(ref_words)) >= 0.45
+                matches = sum(1 for w in ref_words if w in page_clean)
+                return (matches / len(ref_words)) >= 0.5
 
             def _expand_replies(pg):
                 """Click all visible reply expanders and wait for content to load."""
@@ -694,17 +708,17 @@ def post_reply(video_id: str, parent_comment_id: str, reply_text: str, comment_t
             def _scan_threads(pg, attempt: int) -> tuple:
                 """Scan visible threads for the target comment. Returns (thread, renderer) or (None, None)."""
                 threads = pg.query_selector_all("ytd-comment-thread-renderer")
-                if attempt == 0:
-                    print(f"  [REPLY] {len(threads)} thread(s) on page")
-                    for i, th in enumerate(threads[:5]):
+                if attempt % 5 == 0:
+                    print(f"  [REPLY] scroll={attempt} — {len(threads)} thread(s) visible")
+                    for i, th in enumerate(threads[:8]):
                         el = th.query_selector("#content-text")
-                        txt = (el.inner_text() or "").strip()[:80] if el else ""
-                        print(f"  [REPLY] Thread[{i}] top: '{txt}'")
+                        txt = _clean_text((el.inner_text() or "").strip())[:80] if el else ""
+                        print(f"  [REPLY] T[{i}] top(clean): '{txt}'")
                         for j, nr in enumerate(th.query_selector_all(
                                 "ytd-comment-replies-renderer ytd-comment-renderer")[:3]):
                             nel = nr.query_selector("#content-text")
-                            ntxt = (nel.inner_text() or "").strip()[:80] if nel else ""
-                            print(f"  [REPLY] Thread[{i}] reply[{j}]: '{ntxt}'")
+                            ntxt = _clean_text((nel.inner_text() or "").strip())[:80] if nel else ""
+                            print(f"  [REPLY] T[{i}] reply[{j}](clean): '{ntxt}'")
 
                 for thread in threads:
                     top_renderer = thread.query_selector("ytd-comment-renderer")
