@@ -38,64 +38,39 @@ def _is_real_id(cid: str) -> bool:
     )
 
 
-def _extract_comment_id(renderer) -> str:
-    """Extract the real YouTube comment ID from a ytd-comment-renderer element."""
-    try:
-        # Primary: Polymer internal data (most reliable)
-        cid = renderer.evaluate("""el => {
-            const d = el.data || el.__data || {};
-            return d.commentId
-                || (d.comment && d.comment.commentId)
-                || (d.replies && d.replies.commentId)
-                || '';
-        }""") or ""
-        if cid and len(cid) > 10:
-            return cid
-        # Fallback: id attribute "comment-{ID}"
-        el_id = renderer.get_attribute("id") or ""
-        if el_id.startswith("comment-"):
-            cid = el_id[len("comment-"):]
-            if len(cid) > 10:
-                return cid
-    except Exception:
-        pass
-    return ""
-
-
-def _capture_posted_comment_id(pg, comment_text: str) -> str:
+def _intercept_comment_id(pg) -> dict:
     """
-    After posting a comment, sort to Newest first and extract the real
-    YouTube comment ID from the first matching thread.
-    Returns the ID string, or "" if extraction fails.
+    Attach a network-response listener that captures YouTube comment IDs
+    from the API response at the moment of posting.
+
+    Returns a dict with key "value" that is populated by the listener.
+    Call pg.remove_listener("response", holder["fn"]) when done.
     """
-    try:
-        # Scroll the comments section into view before sorting
-        comments_section = pg.query_selector("#comments")
-        if comments_section:
-            comments_section.scroll_into_view_if_needed()
-        time.sleep(random.uniform(1.0, 1.5))
+    holder = {"value": "", "fn": None}
 
-        _sort_comments_newest(pg)
-        time.sleep(random.uniform(1.5, 2.0))
+    def _on_response(response):
+        if holder["value"]:
+            return  # already captured
+        try:
+            if response.status != 200:
+                return
+            url = response.url
+            if "youtubei" not in url:
+                return
+            if not any(k in url for k in ("create_comment", "comment/create", "comment_reply")):
+                return
+            body = response.body().decode("utf-8", errors="ignore")
+            # YouTube comment IDs appear as: "commentId":"Ugw..."
+            m = re.search(r'"commentId"\s*:\s*"([^"]{20,})"', body)
+            if m:
+                holder["value"] = m.group(1)
+                print(f"  [POST] Captured comment ID via API: {holder['value']}")
+        except Exception:
+            pass
 
-        # Our comment should now be the first (or one of the first) threads
-        clean_ref = re.sub(r"[^\w\s]", " ", comment_text[:40].lower()).strip()
-        for thread in pg.query_selector_all("ytd-comment-thread-renderer")[:8]:
-            text_el = thread.query_selector("#content-text")
-            txt = (text_el.inner_text() or "").strip() if text_el else ""
-            clean_txt = re.sub(r"[^\w\s]", " ", txt[:50].lower()).strip()
-            # Verify this is our comment: at least 10 chars of the start must match
-            if clean_ref[:10] and clean_ref[:10] in clean_txt:
-                renderer = thread.query_selector("ytd-comment-renderer")
-                if renderer:
-                    cid = _extract_comment_id(renderer)
-                    if cid:
-                        print(f"  [POST] Captured comment ID: {cid}")
-                        return cid
-    except Exception as e:
-        print(f"  [POST] Could not capture comment ID: {e}")
-    print("  [POST] Real comment ID not captured — falling back to synthetic ID")
-    return ""
+    holder["fn"] = _on_response
+    pg.on("response", _on_response)
+    return holder
 
 
 def _random_imperfection(page):
@@ -592,15 +567,19 @@ def post_comment(video_id: str, comment_text: str, page=None, video_title: str =
         human_type(pg, "#contenteditable-root", comment_text)
         time.sleep(random.uniform(1.5, 3.0))
 
+        # Intercept the YouTube API response to capture the real comment ID
+        id_holder = _intercept_comment_id(pg)
+
         submit_btn = pg.query_selector("ytd-commentbox #submit-button")
         if not submit_btn:
             submit_btn = pg.query_selector("#submit-button")
         human_click_element(pg, submit_btn)
         time.sleep(random.uniform(3.0, 5.0))
 
-        # Capture the real YouTube comment ID so post_reply can navigate
-        # directly to it with ?lc=ID instead of searching by text.
-        real_id = _capture_posted_comment_id(pg, comment_text)
+        pg.remove_listener("response", id_holder["fn"])
+        real_id = id_holder["value"]
+        if not real_id:
+            print("  [POST] API interception missed — falling back to synthetic ID")
         return real_id or f"posted_{video_id}"
 
     if page is not None:
@@ -733,29 +712,19 @@ def post_reply(video_id: str, parent_comment_id: str, reply_text: str, comment_t
             target_renderer = None  # specific comment renderer whose reply button to click
 
             raw = (comment_text or "").strip()
-
-            def _clean_text(s: str) -> str:
-                """Lowercase, strip all punctuation/special chars, collapse whitespace."""
-                s = re.sub(r"[^\w\s]", " ", s.lower())
-                return re.sub(r"\s+", " ", s).strip()
-
-            raw_clean = _clean_text(raw)
-            ref_start = raw_clean[:45]   # first ~45 cleaned chars — unique enough for a match
-            ref_words = [w for w in raw_clean.split() if len(w) > 3][:10]
+            words = raw.split()
+            ref_words = [w.lower().strip("'\".,!?-") for w in words[:12] if len(w) > 3]
             print(f"  [REPLY] Looking for: '{raw[:80]}'")
-            print(f"  [REPLY] Cleaned ref start: '{ref_start}'")
+            print(f"  [REPLY] ref_words: {ref_words[:6]}")
 
             def _text_matches(thread_text: str) -> bool:
-                page_clean = _clean_text(thread_text)
-                # Primary: cleaned substring of stored text appears somewhere in page text
-                # (handles @username prefix YouTube adds to replies)
-                if len(ref_start) > 12 and ref_start in page_clean:
-                    return True
-                # Fallback: word-overlap (for truncated or slightly altered text)
-                if not ref_words or not page_clean:
+                t = thread_text.lower()
+                if not ref_words:
                     return False
-                matches = sum(1 for w in ref_words if w in page_clean)
-                return (matches / len(ref_words)) >= 0.5
+                # Word-overlap: count how many ref_words appear anywhere in the page text
+                # (handles typos, @username prefix, minor rendering differences)
+                matches = sum(1 for w in ref_words if w in t)
+                return (matches / len(ref_words)) >= 0.4
 
             def _expand_replies(pg):
                 """Click all visible reply expanders and wait for content to load."""
@@ -871,29 +840,21 @@ def post_reply(video_id: str, parent_comment_id: str, reply_text: str, comment_t
             _type_reply(page, reply_text)
             time.sleep(random.uniform(1.5, 3.0))
 
+            # Intercept the API response to capture the real reply comment ID
+            id_holder = _intercept_comment_id(page)
+
             submit_btn = target_thread.query_selector("#submit-button")
             if not submit_btn:
                 raise Exception("Submit button not found in reply box")
             human_click_element(page, submit_btn)
             time.sleep(random.uniform(3.0, 5.0))
 
-            # Capture the real reply ID for the next turn's direct navigation
-            real_reply_id = ""
-            try:
-                time.sleep(1.5)
-                clean_ref = re.sub(r"[^\w\s]", " ", reply_text[:40].lower()).strip()
-                for renderer in target_thread.query_selector_all(
-                        "ytd-comment-replies-renderer ytd-comment-renderer"):
-                    rel = renderer.query_selector("#content-text")
-                    rtxt = (rel.inner_text() or "").strip() if rel else ""
-                    clean_txt = re.sub(r"[^\w\s]", " ", rtxt[:50].lower()).strip()
-                    if clean_ref[:10] and clean_ref[:10] in clean_txt:
-                        real_reply_id = _extract_comment_id(renderer)
-                        if real_reply_id:
-                            print(f"  [REPLY] Captured reply ID: {real_reply_id}")
-                            break
-            except Exception as e:
-                print(f"  [REPLY] Could not capture reply ID: {e}")
+            page.remove_listener("response", id_holder["fn"])
+            real_reply_id = id_holder["value"]
+            if real_reply_id:
+                print(f"  [REPLY] Captured reply ID via API: {real_reply_id}")
+            else:
+                print("  [REPLY] API interception missed — using synthetic reply ID")
 
             return real_reply_id or f"reply_{parent_comment_id}"
         finally:
