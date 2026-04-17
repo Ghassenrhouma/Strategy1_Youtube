@@ -1,4 +1,5 @@
 import os
+import re
 import random
 import time
 from datetime import datetime
@@ -24,6 +25,43 @@ def _wait_for_load(page, timeout=10000):
 DRY_RUN    = os.getenv("DRY_RUN",    "True").lower() == "true"
 SKIP_DELAYS = os.getenv("SKIP_DELAYS", "True").lower() == "true"
 NO_WATCH   = os.getenv("NO_WATCH",   "False").lower() == "true"
+
+
+def _is_real_id(cid: str) -> bool:
+    return (bool(cid)
+            and not cid.startswith("posted_")
+            and not cid.startswith("dry_run")
+            and not cid.startswith("reply_")
+            and len(cid) > 15)
+
+
+def _intercept_comment_id(pg) -> dict:
+    """Register a response listener that captures the real YouTube comment ID
+    from the create_comment / comment_reply API response body."""
+    holder = {"value": "", "fn": None}
+
+    def _on_response(response):
+        if holder["value"]:
+            return
+        try:
+            if response.status != 200:
+                return
+            url = response.url
+            if "youtubei" not in url:
+                return
+            if not any(k in url for k in ("create_comment", "createComment", "comment_reply", "comment/create")):
+                return
+            body = response.body().decode("utf-8", errors="ignore")
+            m = re.search(r'"commentId"\s*:\s*"([^"]{15,})"', body)
+            if m:
+                holder["value"] = m.group(1)
+                print(f"  [POST] Captured real comment ID: {holder['value']}")
+        except Exception:
+            pass
+
+    holder["fn"] = _on_response
+    pg.on("response", _on_response)
+    return holder
 
 
 def _random_imperfection(page):
@@ -376,21 +414,16 @@ def _type_reply(page, text):
 
     for word_idx, word in enumerate(words):
         for char in word:
-            page.keyboard.type(char)
-            # Slower base: gauss centred at 0.13s
-            delay = max(0.04, min(0.40, random.gauss(0.13, 0.05)))
-            if char in ".,!?;:":
-                # Re-reads after punctuation
-                delay += random.uniform(0.20, 0.55)
-            # Occasional typo: wrong char then backspace
+            # Occasional typo: type wrong char, notice, backspace, then type correct char
             if char.isalpha() and random.random() < 0.025:
-                time.sleep(delay)
                 page.keyboard.type(random.choice("abcdefghijklmnopqrstuvwxyz"))
                 time.sleep(random.uniform(0.15, 0.40))
                 page.keyboard.press("Backspace")
                 time.sleep(random.uniform(0.08, 0.22))
-                page.keyboard.type(char)
-                delay = random.uniform(0.06, 0.18)
+            page.keyboard.type(char)
+            delay = max(0.04, min(0.40, random.gauss(0.13, 0.05)))
+            if char in ".,!?;:":
+                delay += random.uniform(0.20, 0.55)
             time.sleep(delay)
 
         if word_idx < total_words - 1:
@@ -517,6 +550,8 @@ def post_comment(video_id: str, comment_text: str, page=None, video_title: str =
 
         time.sleep(random.uniform(1.0, 2.5))
 
+        id_holder = _intercept_comment_id(pg)
+
         human_type(pg, "#contenteditable-root", comment_text)
         time.sleep(random.uniform(1.5, 3.0))
 
@@ -524,9 +559,13 @@ def post_comment(video_id: str, comment_text: str, page=None, video_title: str =
         if not submit_btn:
             submit_btn = pg.query_selector("#submit-button")
         human_click_element(pg, submit_btn)
-        time.sleep(random.uniform(3.0, 5.0))
+        time.sleep(random.uniform(4.0, 6.0))
 
-        return f"posted_{video_id}"
+        pg.remove_listener("response", id_holder["fn"])
+        real_id = id_holder["value"]
+        if not real_id:
+            print("  [POST] API interception missed — using synthetic ID")
+        return real_id or f"posted_{video_id}"
 
     if page is not None:
         return _execute(page)
@@ -618,127 +657,124 @@ def post_reply(video_id: str, parent_comment_id: str, reply_text: str, comment_t
         try:
             page = context.new_page()
             patch_page(page)
-            _navigate_to_video(page, video_id)
-            if not NO_WATCH:
-                _variable_video_behavior(page)
+
+            use_lc = _is_real_id(parent_comment_id)
+
+            if use_lc:
+                # Navigate directly to the comment via ?lc= — no need for text matching
+                print(f"  [REPLY] Navigating with ?lc={parent_comment_id}")
+                page.goto(
+                    f"https://www.youtube.com/watch?v={video_id}&lc={parent_comment_id}"
+                )
+                _wait_for_load(page)
+                time.sleep(random.uniform(2.0, 4.0))
+                _ensure_video_playing(page)
+                if not NO_WATCH:
+                    _variable_video_behavior(page)
+            else:
+                _navigate_to_video(page, video_id)
+                if not NO_WATCH:
+                    _variable_video_behavior(page)
 
             # Guard against autoplay navigating away during watch time
             if f"watch?v={video_id}" not in page.url:
                 print(f"  [WARN] Autoplay navigated away — returning to target video")
-                page.goto(f"https://www.youtube.com/watch?v={video_id}")
+                dest = (
+                    f"https://www.youtube.com/watch?v={video_id}&lc={parent_comment_id}"
+                    if use_lc
+                    else f"https://www.youtube.com/watch?v={video_id}"
+                )
+                page.goto(dest)
                 _wait_for_load(page)
                 time.sleep(random.uniform(2, 4))
 
             human_scroll(page)
 
-            # Step 1: wait for comments section container
+            # Wait for comment section
             page.wait_for_selector("#comments ytd-item-section-renderer", timeout=30000)
 
-            # Step 2: sort to Newest first BEFORE loading threads
-            _sort_comments_newest(page)
+            if not use_lc:
+                # Sort newest first so our recently-posted comment is near the top
+                _sort_comments_newest(page)
+                time.sleep(random.uniform(1.5, 2.5))
 
-            # Step 3: wait for comment section to reload after sort, then scroll
-            # The sort triggers a DOM refresh — stale elements from before the
-            # sort must be discarded, so we re-wait from scratch.
-            time.sleep(random.uniform(1.5, 2.5))
-            for _scroll_attempt in range(15):
+            # Scroll until threads render
+            for _ in range(15):
                 if page.query_selector("ytd-comment-thread-renderer"):
                     break
                 page.evaluate("window.scrollBy(0, 400)")
                 time.sleep(random.uniform(0.8, 1.5))
 
             page.wait_for_selector("ytd-comment-thread-renderer", timeout=30000)
-            time.sleep(random.uniform(0.5, 1.0))  # let all threads settle
+            time.sleep(random.uniform(0.5, 1.0))
 
             target_thread = None
-            # Build multiple short snippets from the stored text to handle
-            # truncation, typos, or rendering differences on the page.
-            raw = (comment_text or "").strip()
-            words = raw.split()
-            # Use first 8 clean words as the reference set for fuzzy matching.
-            # Exact substring match fails because human_type introduces typos.
-            ref_words = [w.lower().strip("'\".,!?") for w in words[:8] if len(w) > 3]
-            print(f"  [REPLY] Matching against ref words: {ref_words}")
 
-            def _text_matches(thread_text: str) -> bool:
-                t_words = [w.lower().strip("'\".,!?") for w in thread_text.split() if len(w) > 3]
-                if not ref_words or not t_words:
-                    return False
-                matches = sum(1 for w in ref_words if any(w in tw or tw in w for tw in t_words))
-                score = matches / len(ref_words)
-                return score >= 0.5  # 50% of ref words found = match
-
-            for scroll_attempt in range(12):
-                # Expand "...more" truncations
-                for expander in page.query_selector_all("ytd-comment-thread-renderer #expand"):
-                    try:
-                        if expander.is_visible():
-                            expander.click()
-                            time.sleep(0.3)
-                    except Exception:
-                        pass
-
-                # Expand "N replies" dropdowns — try every known selector variant
-                for sel in [
-                    "ytd-comment-replies-renderer #expander",
-                    "ytd-comment-replies-renderer #more-replies",
-                    "ytd-comment-replies-renderer ytd-button-renderer",
-                ]:
-                    for btn in page.query_selector_all(sel):
-                        try:
-                            if btn.is_visible():
-                                btn.click()
-                                time.sleep(random.uniform(0.5, 1.0))
-                        except Exception:
-                            pass
-
-                threads = page.query_selector_all("ytd-comment-thread-renderer")
-
-                if scroll_attempt == 0:
-                    print(f"  [REPLY] {len(threads)} thread(s) on page")
-                    for i, th in enumerate(threads[:5]):
-                        el = th.query_selector("#content-text")
-                        txt = (el.inner_text() or "").strip()[:80] if el else ""
-                        print(f"  [REPLY] Thread[{i}] top: '{txt}'")
-                        # Print nested replies if any
-                        nested = th.query_selector_all("ytd-comment-renderer #content-text")
-                        for j, nel in enumerate(nested[:3]):
-                            ntxt = (nel.inner_text() or "").strip()[:80]
-                            print(f"  [REPLY] Thread[{i}] reply[{j}]: '{ntxt}'")
-                        # Print any reply expander buttons found
-                        for sel in ["ytd-comment-replies-renderer #expander", "ytd-comment-replies-renderer #more-replies", "ytd-comment-replies-renderer ytd-button-renderer"]:
-                            btns = th.query_selector_all(sel)
-                            if btns:
-                                print(f"  [REPLY] Thread[{i}] expander '{sel}': {len(btns)} found, visible={btns[0].is_visible()}")
-
-                for thread in threads:
-                    # Check top-level comment text
-                    text_el = thread.query_selector("#content-text")
-                    thread_text = (text_el.inner_text() or "").strip() if text_el else ""
-                    if _text_matches(thread_text):
-                        print(f"  [REPLY] Matched top-level on scroll {scroll_attempt}: '{thread_text[:80]}'")
-                        target_thread = thread
+            if use_lc:
+                # After ?lc= navigation YouTube positions the target comment at the
+                # top of the rendered section — scan the first few threads for our ID
+                for attempt in range(6):
+                    threads = page.query_selector_all("ytd-comment-thread-renderer")
+                    for t in threads:
+                        if t.query_selector("ytd-comment-renderer[is-highlighted]"):
+                            target_thread = t
+                            print(f"  [REPLY] Found highlighted thread (attempt {attempt})")
+                            break
+                    if not target_thread and threads:
+                        # Check inner HTML for the comment ID in case is-highlighted is absent
+                        for t in threads[:5]:
+                            try:
+                                if parent_comment_id in (t.inner_html() or ""):
+                                    target_thread = t
+                                    print(f"  [REPLY] Found thread by ID in HTML (attempt {attempt})")
+                                    break
+                            except Exception:
+                                pass
+                    if target_thread:
                         break
+                    page.evaluate("window.scrollBy(0, 500)")
+                    time.sleep(random.uniform(0.8, 1.5))
 
-                    # Check nested replies inside this thread
-                    reply_els = thread.query_selector_all("ytd-comment-renderer #content-text")
-                    for rel in reply_els:
-                        reply_text_found = (rel.inner_text() or "").strip()
-                        if _text_matches(reply_text_found):
-                            print(f"  [REPLY] Matched nested reply on scroll {scroll_attempt}: '{reply_text_found[:80]}'")
+                if not target_thread:
+                    # Last resort: first visible thread after ?lc= is almost always correct
+                    threads = page.query_selector_all("ytd-comment-thread-renderer")
+                    if threads:
+                        target_thread = threads[0]
+                        print(f"  [REPLY] Using first thread as fallback after ?lc=")
+
+            else:
+                # Text-matching fallback when no real ID is stored
+                raw = (comment_text or "").strip()
+                words = raw.split()
+                ref_words = [w.lower().strip("'\".,!?") for w in words[:10] if len(w) > 3]
+                print(f"  [REPLY] Text-matching ref words: {ref_words}")
+
+                def _text_matches(thread_text: str) -> bool:
+                    t_words = [w.lower().strip("'\".,!?") for w in thread_text.split() if len(w) > 3]
+                    if not ref_words or not t_words:
+                        return False
+                    matches = sum(1 for w in ref_words if any(w in tw or tw in w for tw in t_words))
+                    return (matches / len(ref_words)) >= 0.5
+
+                for scroll_attempt in range(15):
+                    threads = page.query_selector_all("ytd-comment-thread-renderer")
+                    if scroll_attempt == 0:
+                        print(f"  [REPLY] {len(threads)} thread(s) visible")
+
+                    for thread in threads:
+                        text_el = thread.query_selector("#content-text")
+                        thread_text = (text_el.inner_text() or "").strip() if text_el else ""
+                        if _text_matches(thread_text):
+                            print(f"  [REPLY] Matched on scroll {scroll_attempt}: '{thread_text[:80]}'")
                             target_thread = thread
                             break
                     if target_thread:
                         break
-
-                if target_thread:
-                    break
-                page.evaluate("window.scrollBy(0, 500)")
-                time.sleep(random.uniform(1.0, 2.0))
+                    page.evaluate("window.scrollBy(0, 500)")
+                    time.sleep(random.uniform(1.0, 2.0))
 
             if not target_thread:
-                print(f"  [REPLY] Target comment not found after 12 scrolls - aborting")
-                raise Exception("Target comment not found in page — not posting to avoid misfire")
+                raise Exception("Target comment not found — aborting to avoid misfire")
 
             target_thread.scroll_into_view_if_needed()
             time.sleep(random.uniform(0.5, 1.0))
@@ -757,6 +793,8 @@ def post_reply(video_id: str, parent_comment_id: str, reply_text: str, comment_t
             human_click_element(page, input_el)
             time.sleep(random.uniform(0.5, 1.0))
 
+            id_holder = _intercept_comment_id(page)
+
             _type_reply(page, reply_text)
             time.sleep(random.uniform(1.5, 3.0))
 
@@ -764,9 +802,13 @@ def post_reply(video_id: str, parent_comment_id: str, reply_text: str, comment_t
             if not submit_btn:
                 raise Exception("Submit button not found in reply box")
             human_click_element(page, submit_btn)
-            time.sleep(random.uniform(3.0, 5.0))
+            time.sleep(random.uniform(4.0, 6.0))
 
-            return f"reply_{parent_comment_id}"
+            page.remove_listener("response", id_holder["fn"])
+            real_reply_id = id_holder["value"]
+            if not real_reply_id:
+                print("  [POST] Reply ID interception missed — using synthetic ID")
+            return real_reply_id or f"reply_{parent_comment_id}"
         finally:
             context.close()
 

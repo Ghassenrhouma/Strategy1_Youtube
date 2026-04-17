@@ -316,21 +316,16 @@ def human_type(page, selector, text):
 
     for word_idx, word in enumerate(words):
         for char in word:
-            page.keyboard.type(char)
-            # Slower base: gauss centred at 0.13s
-            delay = max(0.04, min(0.40, random.gauss(0.13, 0.05)))
-            if char in ".,!?;:":
-                # Re-reads after punctuation
-                delay += random.uniform(0.20, 0.55)
-            # Occasional typo: wrong char then backspace
+            # Occasional typo: type wrong char, notice, backspace, then type correct char
             if char.isalpha() and random.random() < 0.025:
-                time.sleep(delay)
                 page.keyboard.type(random.choice("abcdefghijklmnopqrstuvwxyz"))
                 time.sleep(random.uniform(0.15, 0.40))
                 page.keyboard.press("Backspace")
                 time.sleep(random.uniform(0.08, 0.22))
-                page.keyboard.type(char)
-                delay = random.uniform(0.06, 0.18)
+            page.keyboard.type(char)
+            delay = max(0.04, min(0.40, random.gauss(0.13, 0.05)))
+            if char in ".,!?;:":
+                delay += random.uniform(0.20, 0.55)
             time.sleep(delay)
 
         if word_idx < total_words - 1:
