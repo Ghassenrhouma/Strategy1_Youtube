@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
 from browser_helper import (
-    get_browser_context, save_cookies, patch_page,
+    get_browser_context, patch_page,
     human_click, human_click_element, human_scroll, human_type,
 )
 
@@ -461,7 +461,6 @@ def passive_browse_session(page=None):
         try:
             _browse(pg)
         finally:
-            save_cookies(context)
             context.close()
 
 
@@ -539,7 +538,6 @@ def post_comment(video_id: str, comment_text: str, page=None, video_title: str =
             patch_page(pg)
             return _execute(pg)
         finally:
-            save_cookies(context)
             context.close()
 
 
@@ -652,13 +650,11 @@ def post_reply(video_id: str, parent_comment_id: str, reply_text: str, comment_t
             page.wait_for_selector("ytd-comment-thread-renderer", timeout=30000)
             time.sleep(random.uniform(0.5, 1.0))  # let all threads settle
 
-            target_thread = None
-            # Build multiple short snippets from the stored text to handle
-            # truncation, typos, or rendering differences on the page.
+            target_thread   = None
+            target_renderer = None  # specific comment renderer whose reply button to click
+
             raw = (comment_text or "").strip()
             words = raw.split()
-            # Use first 8 clean words as the reference set for fuzzy matching.
-            # Exact substring match fails because human_type introduces typos.
             ref_words = [w.lower().strip("'\".,!?") for w in words[:8] if len(w) > 3]
             print(f"  [REPLY] Matching against ref words: {ref_words}")
 
@@ -667,8 +663,7 @@ def post_reply(video_id: str, parent_comment_id: str, reply_text: str, comment_t
                 if not ref_words or not t_words:
                     return False
                 matches = sum(1 for w in ref_words if any(w in tw or tw in w for tw in t_words))
-                score = matches / len(ref_words)
-                return score >= 0.5  # 50% of ref words found = match
+                return (matches / len(ref_words)) >= 0.5
 
             for scroll_attempt in range(12):
                 # Expand "...more" truncations
@@ -680,7 +675,7 @@ def post_reply(video_id: str, parent_comment_id: str, reply_text: str, comment_t
                     except Exception:
                         pass
 
-                # Expand "N replies" dropdowns — try every known selector variant
+                # Expand "N replies" dropdowns
                 for sel in [
                     "ytd-comment-replies-renderer #expander",
                     "ytd-comment-replies-renderer #more-replies",
@@ -702,33 +697,33 @@ def post_reply(video_id: str, parent_comment_id: str, reply_text: str, comment_t
                         el = th.query_selector("#content-text")
                         txt = (el.inner_text() or "").strip()[:80] if el else ""
                         print(f"  [REPLY] Thread[{i}] top: '{txt}'")
-                        # Print nested replies if any
-                        nested = th.query_selector_all("ytd-comment-renderer #content-text")
-                        for j, nel in enumerate(nested[:3]):
-                            ntxt = (nel.inner_text() or "").strip()[:80]
+                        for j, nr in enumerate(th.query_selector_all(
+                                "ytd-comment-replies-renderer ytd-comment-renderer")[:3]):
+                            nel = nr.query_selector("#content-text")
+                            ntxt = (nel.inner_text() or "").strip()[:80] if nel else ""
                             print(f"  [REPLY] Thread[{i}] reply[{j}]: '{ntxt}'")
-                        # Print any reply expander buttons found
-                        for sel in ["ytd-comment-replies-renderer #expander", "ytd-comment-replies-renderer #more-replies", "ytd-comment-replies-renderer ytd-button-renderer"]:
-                            btns = th.query_selector_all(sel)
-                            if btns:
-                                print(f"  [REPLY] Thread[{i}] expander '{sel}': {len(btns)} found, visible={btns[0].is_visible()}")
 
                 for thread in threads:
-                    # Check top-level comment text
-                    text_el = thread.query_selector("#content-text")
-                    thread_text = (text_el.inner_text() or "").strip() if text_el else ""
+                    # 1. Check top-level comment
+                    top_renderer = thread.query_selector("ytd-comment-renderer")
+                    text_el      = top_renderer.query_selector("#content-text") if top_renderer else None
+                    thread_text  = (text_el.inner_text() or "").strip() if text_el else ""
                     if _text_matches(thread_text):
                         print(f"  [REPLY] Matched top-level on scroll {scroll_attempt}: '{thread_text[:80]}'")
-                        target_thread = thread
+                        target_thread   = thread
+                        target_renderer = top_renderer
                         break
 
-                    # Check nested replies inside this thread
-                    reply_els = thread.query_selector_all("ytd-comment-renderer #content-text")
-                    for rel in reply_els:
-                        reply_text_found = (rel.inner_text() or "").strip()
-                        if _text_matches(reply_text_found):
-                            print(f"  [REPLY] Matched nested reply on scroll {scroll_attempt}: '{reply_text_found[:80]}'")
-                            target_thread = thread
+                    # 2. Check nested replies — scoped to ytd-comment-replies-renderer
+                    #    so we only look at actual replies, not the top-level comment again
+                    for renderer in thread.query_selector_all(
+                            "ytd-comment-replies-renderer ytd-comment-renderer"):
+                        rel  = renderer.query_selector("#content-text")
+                        rtxt = (rel.inner_text() or "").strip() if rel else ""
+                        if _text_matches(rtxt):
+                            print(f"  [REPLY] Matched nested reply on scroll {scroll_attempt}: '{rtxt[:80]}'")
+                            target_thread   = thread
+                            target_renderer = renderer
                             break
                     if target_thread:
                         break
@@ -745,7 +740,12 @@ def post_reply(video_id: str, parent_comment_id: str, reply_text: str, comment_t
             target_thread.scroll_into_view_if_needed()
             time.sleep(random.uniform(0.5, 1.0))
 
-            reply_btn = target_thread.query_selector("#reply-button-end")
+            # Click the reply button on the SPECIFIC matched renderer so the
+            # reply is directed at the right person, not the thread opener.
+            reply_btn = (target_renderer.query_selector("#reply-button-end")
+                         if target_renderer else None)
+            if not reply_btn:
+                reply_btn = target_thread.query_selector("#reply-button-end")
             if not reply_btn:
                 raise Exception("Reply button not found on target comment")
             human_click_element(page, reply_btn)
@@ -770,7 +770,6 @@ def post_reply(video_id: str, parent_comment_id: str, reply_text: str, comment_t
 
             return f"reply_{parent_comment_id}"
         finally:
-            save_cookies(context)
             context.close()
 
 
@@ -900,7 +899,6 @@ def scrape_and_reply(video_id: str, video_title: str, is_replyable_fn, generate_
             patch_page(pg)
             return _execute(pg)
         finally:
-            save_cookies(context)
             context.close()
 
 
@@ -936,7 +934,6 @@ def random_human_action(video_id: str, page=None):
             patch_page(pg)
             _act(pg)
         finally:
-            save_cookies(context)
             context.close()
 
 

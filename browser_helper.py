@@ -1,4 +1,3 @@
-import json
 import random
 import time
 import os
@@ -6,12 +5,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-COOKIES_PATH = os.getenv("COOKIES_PATH", "youtube_cookies.json")
+PROFILE_PATH = os.getenv("PROFILE_PATH", "profiles/default")
 HEADLESS = os.getenv("HEADLESS", "True").lower() == "true"
 
 
 def get_browser_context(playwright):
-    browser = playwright.chromium.launch(
+    return playwright.chromium.launch_persistent_context(
+        user_data_dir=PROFILE_PATH,
         headless=HEADLESS,
         args=[
             "--disable-blink-features=AutomationControlled",
@@ -21,8 +21,6 @@ def get_browser_context(playwright):
             "--window-size=1280,800",
             "--lang=en-US",
         ],
-    )
-    context = browser.new_context(
         user_agent=(
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -33,43 +31,6 @@ def get_browser_context(playwright):
         timezone_id="America/New_York",
         extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
     )
-    with open(COOKIES_PATH) as f:
-        cookies = json.load(f)
-    context.add_cookies(cookies)
-    return context
-
-
-def save_cookies(context) -> None:
-    """Merge refreshed browser cookies back to disk.
-
-    Uses a merge strategy instead of overwrite: cookies returned by the
-    session (potentially rotated by YouTube/Google) update the existing
-    file, while cookies that were loaded but never surfaced by this
-    session (not all cookies are returned by context.cookies()) are
-    preserved. This prevents critical auth tokens from being wiped.
-    """
-    new_cookies = context.cookies()
-
-    # Load existing cookies so we can preserve ones not returned this session
-    try:
-        with open(COOKIES_PATH, encoding="utf-8") as f:
-            existing = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        existing = []
-
-    # Index existing cookies by (name, domain, path) — the unique key
-    cookie_map = {
-        (c.get("name"), c.get("domain"), c.get("path")): c
-        for c in existing
-    }
-
-    # Overlay with fresh cookies — they take priority
-    for cookie in new_cookies:
-        key = (cookie.get("name"), cookie.get("domain"), cookie.get("path"))
-        cookie_map[key] = cookie
-
-    with open(COOKIES_PATH, "w", encoding="utf-8") as f:
-        json.dump(list(cookie_map.values()), f, indent=2)
 
 
 def patch_page(page):

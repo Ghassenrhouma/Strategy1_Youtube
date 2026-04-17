@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 _HERE = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(_HERE, ".env"))
 
-os.environ["COOKIES_PATH"] = os.environ.get("COOKIES_ACCOUNT2", "cookies_account2.json")
+os.environ["PROFILE_PATH"] = os.environ.get("PROFILE_ACCOUNT2", "profiles/account2")
 os.environ["ACCOUNT_ID"]   = "account2"
 
 # ── Local imports (browser_helper / comment_poster read env at import time) ──
@@ -94,7 +94,7 @@ def main() -> None:
     print(f"[STARTUP] Account 2 | Challenger | DRY_RUN={DRY_RUN} | SKIP_DELAYS={SKIP_DELAYS}")
 
     if not DRY_RUN and not verify_cookies():
-        print("[STARTUP] Cookie check failed - re-run save_cookies.py for account2")
+        print("[STARTUP] Profile check failed - re-run login.py for account2")
         sys.exit(1)
 
     while True:

@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 _HERE = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(_HERE, ".env"))
 
-os.environ["COOKIES_PATH"] = os.environ.get("COOKIES_ACCOUNT2", "cookies_account2.json")
+os.environ["PROFILE_PATH"] = os.environ.get("PROFILE_ACCOUNT2", "profiles/account2")
 os.environ["ACCOUNT_ID"]   = "account2"
 
 from comment_poster import post_reply, DRY_RUN, SKIP_DELAYS
@@ -85,7 +85,7 @@ def main() -> None:
     print(f"[STARTUP] S3 Account 2 | Side B | DRY_RUN={DRY_RUN} | SKIP_DELAYS={SKIP_DELAYS}")
 
     if not DRY_RUN and not verify_cookies():
-        print("[STARTUP] Cookie check failed — re-run save_cookies.py for account2")
+        print("[STARTUP] Profile check failed — re-run login.py for account2")
         sys.exit(1)
 
     try:

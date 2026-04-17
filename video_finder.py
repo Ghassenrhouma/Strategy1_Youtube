@@ -192,7 +192,7 @@ def find_target_video(seen_video_ids: set, page=None) -> dict:
     ----------
     seen_video_ids : set of video_id strings already used by this bot
     page           : existing Playwright page (optional); if None a new
-                     browser session is opened using COOKIES_ACCOUNT1
+                     browser session is opened using PROFILE_ACCOUNT1
     """
     def _find(pg):
         tried_queries = set()
@@ -237,8 +237,8 @@ def find_target_video(seen_video_ids: set, page=None) -> dict:
         return _find(page)
 
     with sync_playwright() as p:
-        # Use Account 1 cookies for browsing — read-only, no posting here
-        os.environ["COOKIES_PATH"] = os.getenv("COOKIES_ACCOUNT1", "cookies_account1.json")
+        # Use Account 1 profile for browsing — read-only, no posting here
+        os.environ["PROFILE_PATH"] = os.getenv("PROFILE_ACCOUNT1", "profiles/account1")
         context = get_browser_context(p)
         try:
             pg = context.new_page()

@@ -2,10 +2,13 @@
 .env
 service_account.json
 
-# ── Cookie files (contain live session tokens) ────────────────────────────────
+# ── Cookie files (legacy — superseded by persistent profiles) ─────────────────
 cookies_account1.json
 cookies_account2.json
 cookies_account3.json
+
+# ── Persistent browser profiles (contain live session state) ──────────────────
+profiles/
 
 # ── Runtime state ─────────────────────────────────────────────────────────────
 targets.json
@@ -14,6 +17,7 @@ targets_s2.json
 targets_s2.json.lock
 targets_s3.json
 targets_s3.json.lock
+targets_s4.json
 
 # ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
