@@ -27,6 +27,30 @@ SKIP_DELAYS = os.getenv("SKIP_DELAYS", "True").lower() == "true"
 NO_WATCH   = os.getenv("NO_WATCH",   "False").lower() == "true"
 
 
+def _is_real_id(cid: str) -> bool:
+    """Return True if cid looks like a genuine YouTube comment ID, not a synthetic one."""
+    return (
+        bool(cid)
+        and not cid.startswith("posted_")
+        and not cid.startswith("dry_run")
+        and not cid.startswith("reply_")
+        and len(cid) > 10
+    )
+
+
+def _extract_comment_id(renderer) -> str:
+    """Extract the real YouTube comment ID from a ytd-comment-renderer element."""
+    try:
+        el_id = renderer.get_attribute("id") or ""
+        if el_id.startswith("comment-"):
+            cid = el_id[len("comment-"):]
+            if len(cid) > 10:
+                return cid
+    except Exception:
+        pass
+    return ""
+
+
 def _random_imperfection(page):
     """Simulates human mistakes and corrections."""
     action = random.choice([
@@ -527,7 +551,28 @@ def post_comment(video_id: str, comment_text: str, page=None, video_title: str =
         human_click_element(pg, submit_btn)
         time.sleep(random.uniform(3.0, 5.0))
 
-        return f"posted_{video_id}"
+        # Capture the real YouTube comment ID so post_reply can navigate
+        # directly to it with ?lc=ID instead of searching by text.
+        real_id = ""
+        try:
+            _sort_comments_newest(pg)
+            time.sleep(random.uniform(1.5, 2.0))
+            for thread in pg.query_selector_all("ytd-comment-thread-renderer")[:5]:
+                text_el = thread.query_selector("#content-text")
+                txt = (text_el.inner_text() or "").strip() if text_el else ""
+                ref = re.sub(r"[^\w\s]", " ", comment_text[:25].lower()).strip()
+                page_txt = re.sub(r"[^\w\s]", " ", txt[:30].lower()).strip()
+                if ref[:15] and ref[:15] in page_txt:
+                    renderer = thread.query_selector("ytd-comment-renderer")
+                    if renderer:
+                        real_id = _extract_comment_id(renderer)
+                        if real_id:
+                            print(f"  [POST] Captured comment ID: {real_id}")
+                            break
+        except Exception as e:
+            print(f"  [POST] Could not capture comment ID: {e}")
+
+        return real_id or f"posted_{video_id}"
 
     if page is not None:
         return _execute(page)
@@ -619,37 +664,41 @@ def post_reply(video_id: str, parent_comment_id: str, reply_text: str, comment_t
         try:
             page = context.new_page()
             patch_page(page)
-            _navigate_to_video(page, video_id)
-            if not NO_WATCH:
-                _variable_video_behavior(page)
 
-            # Guard against autoplay navigating away during watch time
-            if f"watch?v={video_id}" not in page.url:
-                print(f"  [WARN] Autoplay navigated away — returning to target video")
-                page.goto(f"https://www.youtube.com/watch?v={video_id}")
+            if _is_real_id(parent_comment_id):
+                # Navigate directly to the comment — YouTube puts it at the top
+                print(f"  [REPLY] Direct navigation to comment: {parent_comment_id}")
+                page.goto(
+                    f"https://www.youtube.com/watch?v={video_id}&lc={parent_comment_id}"
+                )
                 _wait_for_load(page)
-                time.sleep(random.uniform(2, 4))
+                time.sleep(random.uniform(3, 5))
+                if not NO_WATCH:
+                    _variable_video_behavior(page)
+                human_scroll(page)
+            else:
+                _navigate_to_video(page, video_id)
+                if not NO_WATCH:
+                    _variable_video_behavior(page)
 
-            human_scroll(page)
+                if f"watch?v={video_id}" not in page.url:
+                    print(f"  [WARN] Autoplay navigated away — returning to target video")
+                    page.goto(f"https://www.youtube.com/watch?v={video_id}")
+                    _wait_for_load(page)
+                    time.sleep(random.uniform(2, 4))
 
-            # Step 1: wait for comments section container
-            page.wait_for_selector("#comments ytd-item-section-renderer", timeout=30000)
-
-            # Step 2: sort to Newest first BEFORE loading threads
-            _sort_comments_newest(page)
-
-            # Step 3: wait for comment section to reload after sort, then scroll
-            # The sort triggers a DOM refresh — stale elements from before the
-            # sort must be discarded, so we re-wait from scratch.
-            time.sleep(random.uniform(1.5, 2.5))
-            for _scroll_attempt in range(15):
-                if page.query_selector("ytd-comment-thread-renderer"):
-                    break
-                page.evaluate("window.scrollBy(0, 400)")
-                time.sleep(random.uniform(0.8, 1.5))
+                human_scroll(page)
+                page.wait_for_selector("#comments ytd-item-section-renderer", timeout=30000)
+                _sort_comments_newest(page)
+                time.sleep(random.uniform(1.5, 2.5))
+                for _scroll_attempt in range(15):
+                    if page.query_selector("ytd-comment-thread-renderer"):
+                        break
+                    page.evaluate("window.scrollBy(0, 400)")
+                    time.sleep(random.uniform(0.8, 1.5))
 
             page.wait_for_selector("ytd-comment-thread-renderer", timeout=30000)
-            time.sleep(random.uniform(0.5, 1.0))  # let all threads settle
+            time.sleep(random.uniform(0.5, 1.0))
 
             target_thread   = None
             target_renderer = None  # specific comment renderer whose reply button to click
@@ -799,7 +848,25 @@ def post_reply(video_id: str, parent_comment_id: str, reply_text: str, comment_t
             human_click_element(page, submit_btn)
             time.sleep(random.uniform(3.0, 5.0))
 
-            return f"reply_{parent_comment_id}"
+            # Capture the real reply ID for the next turn's direct navigation
+            real_reply_id = ""
+            try:
+                time.sleep(1.0)
+                for renderer in target_thread.query_selector_all(
+                        "ytd-comment-replies-renderer ytd-comment-renderer"):
+                    rel = renderer.query_selector("#content-text")
+                    rtxt = (rel.inner_text() or "").strip() if rel else ""
+                    ref = re.sub(r"[^\w\s]", " ", reply_text[:20].lower()).strip()
+                    page_txt = re.sub(r"[^\w\s]", " ", rtxt[:25].lower()).strip()
+                    if ref[:15] and ref[:15] in page_txt:
+                        real_reply_id = _extract_comment_id(renderer)
+                        if real_reply_id:
+                            print(f"  [REPLY] Captured reply ID: {real_reply_id}")
+                            break
+            except Exception as e:
+                print(f"  [REPLY] Could not capture reply ID: {e}")
+
+            return real_reply_id or f"reply_{parent_comment_id}"
         finally:
             context.close()
 
