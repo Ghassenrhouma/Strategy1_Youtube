@@ -663,35 +663,38 @@ def post_reply(video_id: str, parent_comment_id: str, reply_text: str, comment_t
                 if not ref_words or not t_words:
                     return False
                 matches = sum(1 for w in ref_words if any(w in tw or tw in w for tw in t_words))
-                return (matches / len(ref_words)) >= 0.5
+                return (matches / len(ref_words)) >= 0.45
 
-            for scroll_attempt in range(12):
-                # Expand "...more" truncations
-                for expander in page.query_selector_all("ytd-comment-thread-renderer #expand"):
+            def _expand_replies(pg):
+                """Click all visible reply expanders and wait for content to load."""
+                for expander in pg.query_selector_all("ytd-comment-thread-renderer #expand"):
                     try:
                         if expander.is_visible():
                             expander.click()
                             time.sleep(0.3)
                     except Exception:
                         pass
-
-                # Expand "N replies" dropdowns
                 for sel in [
+                    "ytd-comment-replies-renderer #expander tp-yt-paper-button",
+                    "ytd-comment-replies-renderer tp-yt-paper-button",
+                    "ytd-comment-replies-renderer yt-button-shape button",
                     "ytd-comment-replies-renderer #expander",
                     "ytd-comment-replies-renderer #more-replies",
+                    "ytd-comment-replies-renderer ytd-button-renderer button",
                     "ytd-comment-replies-renderer ytd-button-renderer",
                 ]:
-                    for btn in page.query_selector_all(sel):
+                    for btn in pg.query_selector_all(sel):
                         try:
                             if btn.is_visible():
                                 btn.click()
-                                time.sleep(random.uniform(0.5, 1.0))
+                                time.sleep(random.uniform(1.0, 1.5))
                         except Exception:
                             pass
 
-                threads = page.query_selector_all("ytd-comment-thread-renderer")
-
-                if scroll_attempt == 0:
+            def _scan_threads(pg, attempt: int) -> tuple:
+                """Scan visible threads for the target comment. Returns (thread, renderer) or (None, None)."""
+                threads = pg.query_selector_all("ytd-comment-thread-renderer")
+                if attempt == 0:
                     print(f"  [REPLY] {len(threads)} thread(s) on page")
                     for i, th in enumerate(threads[:5]):
                         el = th.query_selector("#content-text")
@@ -704,38 +707,52 @@ def post_reply(video_id: str, parent_comment_id: str, reply_text: str, comment_t
                             print(f"  [REPLY] Thread[{i}] reply[{j}]: '{ntxt}'")
 
                 for thread in threads:
-                    # 1. Check top-level comment
                     top_renderer = thread.query_selector("ytd-comment-renderer")
                     text_el      = top_renderer.query_selector("#content-text") if top_renderer else None
                     thread_text  = (text_el.inner_text() or "").strip() if text_el else ""
                     if _text_matches(thread_text):
-                        print(f"  [REPLY] Matched top-level on scroll {scroll_attempt}: '{thread_text[:80]}'")
-                        target_thread   = thread
-                        target_renderer = top_renderer
-                        break
+                        print(f"  [REPLY] Matched top-level on scroll {attempt}: '{thread_text[:80]}'")
+                        return thread, top_renderer
 
-                    # 2. Check nested replies — scoped to ytd-comment-replies-renderer
-                    #    so we only look at actual replies, not the top-level comment again
                     for renderer in thread.query_selector_all(
                             "ytd-comment-replies-renderer ytd-comment-renderer"):
                         rel  = renderer.query_selector("#content-text")
                         rtxt = (rel.inner_text() or "").strip() if rel else ""
                         if _text_matches(rtxt):
-                            print(f"  [REPLY] Matched nested reply on scroll {scroll_attempt}: '{rtxt[:80]}'")
-                            target_thread   = thread
-                            target_renderer = renderer
-                            break
-                    if target_thread:
-                        break
+                            print(f"  [REPLY] Matched nested reply on scroll {attempt}: '{rtxt[:80]}'")
+                            return thread, renderer
 
+                return None, None
+
+            # Pass 1: Newest-first sort (25 scrolls)
+            for scroll_attempt in range(25):
+                _expand_replies(page)
+                target_thread, target_renderer = _scan_threads(page, scroll_attempt)
                 if target_thread:
                     break
                 page.evaluate("window.scrollBy(0, 500)")
                 time.sleep(random.uniform(1.0, 2.0))
 
+            # Pass 2: fallback — reload without changing sort, scroll 25 more
             if not target_thread:
-                print(f"  [REPLY] Target comment not found after 12 scrolls - aborting")
-                raise Exception("Target comment not found in page — not posting to avoid misfire")
+                print("  [REPLY] Not found with Newest-first — reloading with default sort")
+                page.goto(f"https://www.youtube.com/watch?v={video_id}")
+                _wait_for_load(page)
+                time.sleep(random.uniform(3, 5))
+                human_scroll(page)
+                page.wait_for_selector("ytd-comment-thread-renderer", timeout=30000)
+                time.sleep(random.uniform(1.5, 2.5))
+                for scroll_attempt in range(25):
+                    _expand_replies(page)
+                    target_thread, target_renderer = _scan_threads(page, scroll_attempt)
+                    if target_thread:
+                        break
+                    page.evaluate("window.scrollBy(0, 500)")
+                    time.sleep(random.uniform(1.0, 2.0))
+
+            if not target_thread:
+                print(f"  [REPLY] Target comment not found after 50 scrolls - aborting")
+                raise Exception("Target comment not found after 50 scrolls — not posting to avoid misfire")
 
             target_thread.scroll_into_view_if_needed()
             time.sleep(random.uniform(0.5, 1.0))
